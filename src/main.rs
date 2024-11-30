@@ -1,21 +1,38 @@
+use std::usize;
+
 use bevy::{
-  input::{
-    keyboard::{Key, KeyboardInput},
-    ButtonState,
-  },
-  prelude::*,
+  input::{ keyboard::{Key, KeyboardInput}, ButtonState },
+  color::palettes::css::*,
+  prelude::*
 };
 use rand::{distributions::Uniform, prelude::Distribution, seq::SliceRandom}; // 0.7.2
+
+
+#[derive(Resource, Deref, DerefMut)]
+struct PlayerLevel(usize);
+#[derive(Component)]
+struct LevelText;
 
 #[derive(Component)]
 struct FallingWord;
 
+#[derive(Component)]
+struct ScoreText;
+
+#[derive(Resource, Deref, DerefMut)]
+struct Score(usize);
+
 #[derive(Component, Deref)]
 struct FloatingAway(Vec2);
 
-fn get_random_word() -> String {
-  let vs = vec!["abc", "def", "ghi", "jkl", "mno"];
-  let word = vs.choose(&mut rand::thread_rng());
+#[derive(Event)]
+struct WordCompletedSuccesfully(Text);
+
+fn get_random_word(level: usize) -> String {
+  let words = vec![
+    ["ape", "sko", "ball", "tog", "bil", "snø", "hus", "ake", "dag", "sol"],
+    ["kake", "hest", "fisk", "gris", "vann", "bekk", "buss", "vott", "måke", "slott"]];
+  let word = words[level - 1].choose(&mut rand::thread_rng());
   match word {
     Some(w) => w,
     None => "default",
@@ -31,7 +48,10 @@ fn get_random_float() -> f32 {
 fn main() {
   App::new()
     .add_plugins(DefaultPlugins)
-    .add_systems(Startup, spawn_text)
+    .insert_resource(PlayerLevel(1))
+    .insert_resource(Score(0))
+    .add_systems(Startup, setup)
+    .add_event::<WordCompletedSuccesfully>()
     .add_systems(
       Update,
       (
@@ -39,51 +59,68 @@ fn main() {
         update_position,
         float_away,
         listen_received_character_events,
+        update_score,
       ),
     )
     .run();
 }
 
-fn create_new_word(window: &Query<&Window>, commands: &mut Commands, asset_server: &Res<AssetServer>) {
+fn create_info_ui(window: &Query<&Window>, commands: &mut Commands, asset_server: &Res<AssetServer>) {
+  let win_width = window.single().size().x;
+  let win_height = window.single().size().y;
+  let score_x = win_width / -2. + win_width * 0.05;
+  let score_y = win_height / 2. - 15.;
+  let level_x = win_width / 2. - (win_width * 0.05);
+  let level_y = win_height / 2. - 15.;
   let font = asset_server.load("fonts/MesloLGLNerdFont-Regular.ttf");
-
-  let green_text = TextStyle {
+  let text_style = TextStyle {
     font: font.clone(),
-    font_size: 60.0,
-    color: Color::oklch(0.7, 0.141, 140.82).with_alpha(1.0),
+    font_size: 30.0,
+    color: bevy::prelude::Color::Srgba(MINT_CREAM),
   };
-
-  let white_text = TextStyle {
-    font: font.clone(),
-    font_size: 60.0,
-    color: Color::WHITE.with_alpha(1.0),
-  };
-
-  let word = get_random_word();
-
-  let top = window.single().size().y / 2.0;
-  let start_pos = Transform::from_translation(Vec3::ZERO.with_y(top));
-
   commands.spawn((
     Text2dBundle {
-      text: Text {
-        sections: vec![
-          TextSection::new("", green_text),
-          TextSection::new(word.clone(), white_text),
-        ],
-        ..default()
-      },
-      transform: start_pos,
+      text: Text::from_sections([
+        TextSection::new("Level: ", text_style.clone()),
+        TextSection::new("1", text_style.clone())
+        ]).with_justify(JustifyText::Left),
+      transform: Transform::from_xyz(level_x, level_y, 0.0),
       ..default()
     },
-    FallingWord,
+    LevelText,
+  ));
+  commands.spawn((
+    Text2dBundle {
+      text: Text::from_sections([
+        TextSection::new("Score: ", text_style.clone()),
+        TextSection::new("0", text_style.clone())
+        ]).with_justify(JustifyText::Left),
+      transform: Transform::from_xyz(score_x, score_y, 0.0),
+      ..default()
+    },
+    ScoreText));
+}
+
+fn create_new_word(window: &Query<&Window>, commands: &mut Commands, asset_server: &Res<AssetServer>, level: &Res<PlayerLevel>) {
+  let font = asset_server.load("fonts/MesloLGLNerdFont-Regular.ttf");
+  let word = get_random_word(***level);
+  let top = window.single().size().y / 2.0;
+  let green = TextStyle { font: font.clone(), font_size: 60.0, color: bevy::prelude::Color::Srgba(LIMEGREEN) };
+  let white = TextStyle { font: font.clone(), font_size: 60.0, color: bevy::prelude::Color::Srgba(MINT_CREAM).with_alpha(1.0) };
+  commands.spawn((
+    Text2dBundle {
+      text: Text::from_sections([TextSection::new("", green), TextSection::new(word.clone(), white)]),
+      transform: Transform::from_translation(Vec3::ZERO.with_y(top)),
+      ..default()
+    },
+    FallingWord
   ));
 }
 
-fn spawn_text(window: Query<&Window>, mut commands: Commands, asset_server: Res<AssetServer>) {
+fn setup(window: Query<&Window>, mut commands: Commands, asset_server: Res<AssetServer>, level: Res<PlayerLevel>) {
   commands.spawn(Camera2dBundle::default());
-
-  create_new_word(&window, &mut commands, &asset_server);
+  create_new_word(&window, &mut commands, &asset_server, &level);
+  create_info_ui(&window, &mut commands, &asset_server);
 }
 
 fn update_position(time: Res<Time>, mut query: Query<&mut Transform, With<FallingWord>>) {
@@ -120,7 +157,6 @@ fn float_away(
       // Loose 3% oppasity every frame
       let new_alpha = current_alpha * 0.97;
       text.sections[0].style.color.set_alpha(new_alpha);
-      //text.sections[1].style.color.set_alpha(new_alpha);
     } else {
       commands.entity(entity).despawn();
     }
@@ -129,17 +165,16 @@ fn float_away(
 
 fn listen_received_character_events(
   mut commands: Commands,
-  mut events: EventReader<KeyboardInput>,
-  mut edit_text: Query<
-    (Entity, &mut Text, &mut Transform),
-    (With<FallingWord>, Without<FloatingAway>),
-  >,
+  mut event_reader: EventReader<KeyboardInput>,
+  mut event_writer: EventWriter<WordCompletedSuccesfully>,
+  mut edit_text: Query<(Entity, &mut Text, &mut Transform), (With<FallingWord>, Without<FloatingAway>)>,
+  window: Query<&Window>,
   asset_server: Res<AssetServer>,
-  window: Query<&Window>
+  level: Res<PlayerLevel>
 ) {
   let (entity, mut edit_text, mut pos) = edit_text.single_mut();
 
-  for event in events.read() {
+  for event in event_reader.read() {
     if event.state == ButtonState::Released {
       continue;
     }
@@ -155,20 +190,28 @@ fn listen_received_character_events(
       pos.translation.y += 50.;
     }
 
+    // If word is completed
     if edit_text.sections[1].value.is_empty() {
       commands.entity(entity).remove::<FallingWord>();
       let vec2 = Vec2::new(get_random_float(), get_random_float()).normalize() * 50.;
       commands.entity(entity).insert(FloatingAway(vec2));
-      create_new_word(&window, &mut commands, &asset_server);
+      let immutable_text = &*edit_text;
+      event_writer.send(WordCompletedSuccesfully(immutable_text.clone()));
+      create_new_word(&window, &mut commands, &asset_server, &level);
     }
   }
 }
 
-fn close_on_esc(
-  mut commands: Commands,
-  focused_windows: Query<(Entity, &Window)>,
-  input: Res<ButtonInput<KeyCode>>,
-) {
+fn update_score(mut score: ResMut<Score>, mut ev_word_completed: EventReader<WordCompletedSuccesfully>, mut query: Query<&mut Text, With<ScoreText>>){
+  for completed_word in ev_word_completed.read(){
+    let points = completed_word.0.sections[0].value.clone().len();
+    **score += points * 10;
+    let mut score_text = query.single_mut();
+    score_text.sections[1].value = score.to_string();
+  }
+}
+
+fn close_on_esc(mut commands: Commands, focused_windows: Query<(Entity, &Window)>, input: Res<ButtonInput<KeyCode>>,) {
   for (window, focus) in focused_windows.iter() {
     if !focus.focused {
       continue;
